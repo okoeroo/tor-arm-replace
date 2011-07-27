@@ -68,21 +68,20 @@ class tor_arm_replace_torrc(object):
     ### Run in init
     def remove_environment(self):
         for i in os.environ:
-            #print i
             os.unsetenv(i)
 
     ### Run in init
     def set_trusted_account_info(self, user="tor-arm", group="tor-arm"):
-        self.trusted_user  = user
-        self.trusted_group = group
         try:
-            self.trusted_uid = pwd.getpwnam(USER).pw_uid
+            self.trusted_uid = pwd.getpwnam(user).pw_uid
+            self.trusted_user  = user
         except:
             print "Our tor-arm user \"%s\" was not found - this is unsafe; exiting now!" % user
             sys.exit(1)
 
         try:
-            self.trusted_gid = grp.getgrnam(GROUP).gr_gid
+            self.trusted_gid = grp.getgrnam(group).gr_gid
+            self.trusted_group = group
         except:
             print "Our tor-arm group \"%s\" was not found - this is unsafe; exiting now!" % group
             sys.exit(1)
@@ -127,6 +126,7 @@ class tor_arm_replace_torrc(object):
             print "Error: couldn't drop privileges. Did I check myself to be sufficiently privileged to get here?"
             sys.exit(1)
 
+    # This is probably a useless function
     def reraise_privs(self):
         os.setuid(0)
         os.seteuid(0)
@@ -136,13 +136,13 @@ class tor_arm_replace_torrc(object):
 
     def backup_configuration_file(self):
         # backup the previous tor config
-        if os.path.exists(TOR_CONFIG_FILE):
+        if os.path.exists(self.dst_conf_file):
             try:
                 # TODO: Safety check
-                backupFilename = "%s_backup_%i" % (TOR_CONFIG_FILE, int(time.time()))
-                shutil.copy(TOR_CONFIG_FILE, backupFilename)
+                backupFilename = "%s_backup_%i" % (self.dst_conf_file, int(time.time()))
+                shutil.copy(self.dst_conf_file, backupFilename)
             except IOError, exc:
-                print "Unable to backup %s (%s)" % (TOR_CONFIG_FILE, exc)
+                print "Unable to backup %s (%s)" % (self.dst_conf_file, exc)
                 sys.exit(1)
 
     def is_configuration_file_correct(self, configfile):
@@ -153,7 +153,6 @@ class tor_arm_replace_torrc(object):
         if rc == 0:
             return True
         else:
-            print "Tor says the new configuration file is invalid: \"%s\" (%s)" % configfile
             return False
 
     def act_like_a_parent(self, child_pid):
@@ -163,11 +162,18 @@ class tor_arm_replace_torrc(object):
         # Done?
         sys.exit(0)
 
-        # As parents we can cheat and reraise privileges - full root now
+        # As parents we can cheat and reraise privileges - gaining full root
         #self.reraise_privs()
 
     def act_like_a_child(self):
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+
+        # Before we perform any work, let's check if the configuration file is ok by Tor.
+        # This assums that the tor program is able to read it
+        if not is_configuration_file_correct(self.src_conf_file):
+            # Tor didn't like the new configuration file. Time to bail out
+            print "Tor says the new configuration file is invalid: \"%s\"" % self.src_conf_file
+            sys.exit(1)
 
         # Make a tempfile and write out the contents
         try:
