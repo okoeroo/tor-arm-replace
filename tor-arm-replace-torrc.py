@@ -11,6 +11,21 @@ it should run the tor-arm-replace-torrc program. If that program is successful
 arm should instruct Tor to reload it's configuration (via HUP or ControlPort).
 """
 
+"""
+Script walkthrough:
+1.  Clean the environment variables. The LD_* is cleaned by the kernel due to
+    setuid bit, but there are less obvious risks.
+2.  Initialize source and destingation paths and lookup the trusted accounts,
+    and fail the group or user wasn't found.
+3.  Am I sufficiently privileged? Either I'm root or effective root. On the
+    later I need to check if we're associated with the trusted group
+4.  Backup the current configuration file, this is TOR_CONFIG_FILE
+5.  Test new configuration file with 'tor --verify-config -f <config file>,
+    using the ARM_CONFIG_FILE as input
+6.  Move/copy new configuration file to new location
+7.  Done
+"""
+
 import os
 import sys
 import grp
@@ -28,33 +43,32 @@ ARM_CONFIG_FILE = "/var/lib/tor-arm/torrc"
 
 
 class tor_arm_replace_torrc(object):
-    def __init__(self):
+    def __init__(self, trusted_user, trusted_group, src_conf_file, dst_conf_file):
         if os.name != "posix":
             print "This is a script specifically for configuring Debian Gnu/Linux and other Unix like systems"
             sys.exit(1)
 
         # 1. Remove the environment, do not pass go otherwise
-        remove_environment()
+        self.remove_environment()
 
-        # 2. Set the trusted user and group information
-        set_trusted_account_info(USER, GROUP)
+        # 2a. Initialize input
+        self.src_conf_file = src_conf_file
+        self.dst_conf_file = dst_conf_file
 
-        # 3. Set configuration file information
-        self.tor_config_file = TOR_CONFIG_FILE
-        self.arm_config_file = ARM_CONFIG_FILE
+        # 2b. Set the trusted user and group information - Test if they exist, or bail
+        set_trusted_account_info(trusted_user, trusted_group)
 
-        # 4. Am I root? - We need to be root, or effective root. Without it continuation is futile
+        # 3. Am I root? - We need to be root, or effective root. Without it continuation is futile
         if not self.got_sufficient_privileges():
             print "Sorry, insufficient privileges. Continuation is futile"
             sys.exit(1)
 
-        # 4b. Continue with the change_configuration()
-        # init is done
+        # Init is done - Continue by calling change_configuration()
 
     ### Run in init
     def remove_environment(self):
         for i in os.environ:
-            print i
+            #print i
             os.unsetenv(i)
 
     ### Run in init
@@ -100,8 +114,8 @@ class tor_arm_replace_torrc(object):
         return False
 
     def drop_privileges(self):
-        # Drop to the unpriv'ed group, and really lose the rest of the groups
-        # - Must set one group to overcome old BSD and current OSX bugs
+        # Drop to the unpriv'ed user and group - Must set one secondary group
+        # to overcome old BSD and current OSX bugs
         try:
             os.setgroups([self.trusted_gid])
             os.setgid(self.trusted_gid)
@@ -110,7 +124,7 @@ class tor_arm_replace_torrc(object):
             os.setuid(self.trusted_uid)
             os.seteuid(self.trusted_uid)
         except:
-            print "Error: couldn't drop privileges. Do I check myself to be sufficiently privileged to get here?"
+            print "Error: couldn't drop privileges. Did I check myself to be sufficiently privileged to get here?"
             sys.exit(1)
 
     def reraise_privs(self):
@@ -152,14 +166,6 @@ class tor_arm_replace_torrc(object):
         # As parents we can cheat and reraise privileges - full root now
         #self.reraise_privs()
 
-
-  # unlink our temp file
-  try:
-    os.remove(tf.name)
-  except:
-    print "Unable to close temp file %s" % tf.name
-    sys.exit(1)
-
     def act_like_a_child(self):
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
@@ -180,25 +186,42 @@ class tor_arm_replace_torrc(object):
                     print "Arm's configuration file (%s) must be owned by the group %s" % (ARM_CONFIG_FILE, GROUP)
                 sys.exit(1)
         # if everything checks out, we're as safe as we're going to get
-                    armConfig = af.read(1024 * 1024) # limited read but not too limited
-                    af.close()
-                    tf.file.write(armConfig)
+                armConfig = af.read(1024 * 1024) # limited read but not too limited
+                af.close()
+                tf.file.write(armConfig)
                 tf.flush()
-                    except:
-                    print "Unable to open the arm config as unpriv'ed user"
+            except:
+                print "Unable to open the arm config as unpriv'ed user"
                 sys.exit(1)
-                    finally:
-                    tf.close()
+            finally:
+                tf.close()
                 sys.exit(0)
 
         # Check the configuration file for correctness
-        if self.is_configuration_file_correct('FFOOOOFOFOFOF'):
-            print "Configuration file is correct"
-        else:
-            print "Configuration file is unusable, bailing out"
-            sys.exit(1)
+            if self.is_configuration_file_correct('FFOOOOFOFOFOF'):
+                print "Configuration file is correct"
+            else:
+                print "Configuration file is unusable, bailing out"
+                sys.exit(1)
 
-    def spoon(self):
+            # unlink our temp file
+            try:
+                os.remove(tf.name)
+            except:
+                print "Unable to close temp file %s" % tf.name
+                sys.exit(1)
+
+    def change_configuration(self):
+        # I'm (effective) root here due to the object initializer
+
+        # 4. Backup current configuration file
+        self.backup_configuration_file()
+
+        # 5. Lower privileges to a more humble level - less privileges, more trust
+        self.drop_privileges()
+
+        # 6. Spoon! - Parent will continue to wait until the child is done.
+        #            The child will exchange the configuration file
         fork_pid = os.fork()
         if (fork_pid == 0):
             # Start to play ball
@@ -207,23 +230,8 @@ class tor_arm_replace_torrc(object):
             # Start parenting
             self.act_like_a_parent(fork_pid)
 
-    def change_configuration(self):
-        # I'm (effective) root here
-        # 5. Backup current configuration file
-        self.backup_configuration_file()
-
-        # 6. Lower privileges to a more humble level - less privileges, more trust
-        self.drop_privileges()
-
-        
-
-        # 7. Fork! - Parent will continue to wait until the child is done.
-        #            The child will exchange the configuration file
-        self.spoon()
-
-
 if __name__ == "__main__":
-    tor_arm = tor_arm_replace_torrc()
+    tor_arm = tor_arm_replace_torrc(USER, GROUP, ARM_CONFIG_FILE, TOR_CONFIG_FILE)
     tor_arm.change_configuration()
 
     sys.exit(0)
