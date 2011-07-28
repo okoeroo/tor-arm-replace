@@ -42,9 +42,21 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <string.h>
+#include <errno.h>
 #include "tor-arm-replace-torrc.h"
 
 int main()
 {
-   return execve(TOR_ARM_REPLACE_TORRC, NULL, NULL);
+    /* Without a proper argv, the execve'd process has nog argv point, which is
+     * against the convention. */
+    char *argv[] = { TOR_ARM_REPLACE_TORRC, NULL };
+    int rc = 0;
+
+    rc = execve(TOR_ARM_REPLACE_TORRC, argv, NULL);
+    /* execve() overwrites the current process image. Getting here means the call failed */
+    if (rc == -1) {
+        printf ("Failed to execute \"%s\". Error: %s\n", "./tor-arm-replace-torrc.py", strerror(errno));
+    }
+    return 1;
 }

@@ -22,6 +22,9 @@ Script walkthrough:
 4.  Backup the current configuration file, this is TOR_CONFIG_FILE
 5.  Test new configuration file with 'tor --verify-config -f <config file>,
     using the ARM_CONFIG_FILE as input
+6.  Fork.
+6a. Parent will wait for the child to come back.
+6b. The child will lose the saved uid and gid and update the tor file
 6.  Move/copy new configuration file to new location
 7.  Done
 """
@@ -37,8 +40,13 @@ import signal
 
 USER = "tor-arm"
 GROUP = "tor-arm"
-TOR_CONFIG_FILE = "/etc/tor/torrc"
-ARM_CONFIG_FILE = "/var/lib/tor-arm/torrc"
+USER = "nobody"
+GROUP = "admin"
+TOR_CONFIG_FILE = "/etc/tor/torrc"            # Destination
+ARM_CONFIG_FILE = "/var/lib/tor-arm/torrc"    # Source
+
+TOR_CONFIG_FILE = "/tmp/torrc"                                                         # Destination
+ARM_CONFIG_FILE = "/Applications/Tools/Vidalia.app/Contents/Resources/torrc.sample"    # Source
 
 
 
@@ -56,7 +64,7 @@ class tor_arm_replace_torrc(object):
         self.dst_conf_file = dst_conf_file
 
         # 2b. Set the trusted user and group information - Test if they exist, or bail
-        set_trusted_account_info(trusted_user, trusted_group)
+        self.set_trusted_account_info(trusted_user, trusted_group)
 
         # 3. Am I root? - We need to be root, or effective root. Without it continuation is futile
         if not self.got_sufficient_privileges():
@@ -93,17 +101,17 @@ class tor_arm_replace_torrc(object):
             return True
 
         # Can I effectively play as the big cheeze?
-        if os.geteuid() == 0:
+        if os.geteuid() != 0:
             print "This script requires (effective) root privileges. Can't continue without it"
             sys.exit(1)
 
         # Ok, effective root, but am I privileged?
         try:
             # checks if that's a group we're in
-            if self.trusted_group in os.getgroups():
+            if self.trusted_gid in os.getgroups():
                 return True
             else:
-                print "Your user needs to be a member of the %s group for this to work" % self.trusted_group
+                print "Your user needs to be a member of the \"%s\" group for this to work" % self.trusted_group
                 return False
         except:
             # Made pedantic
@@ -165,12 +173,13 @@ class tor_arm_replace_torrc(object):
         # As parents we can cheat and reraise privileges - gaining full root
         #self.reraise_privs()
 
+    # All privileges are dropped to the trusted target user
     def act_like_a_child(self):
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
         # Before we perform any work, let's check if the configuration file is ok by Tor.
         # This assums that the tor program is able to read it
-        if not is_configuration_file_correct(self.src_conf_file):
+        if not self.is_configuration_file_correct(self.src_conf_file):
             # Tor didn't like the new configuration file. Time to bail out
             print "Tor says the new configuration file is invalid: \"%s\"" % self.src_conf_file
             sys.exit(1)
@@ -183,6 +192,8 @@ class tor_arm_replace_torrc(object):
             print "We were unable to make a temporary file"
             sys.exit(1)
 
+
+            
 
             try:
                 af = open(ARM_CONFIG_FILE) # this is totally unpriv'ed
@@ -204,7 +215,7 @@ class tor_arm_replace_torrc(object):
                 sys.exit(0)
 
         # Check the configuration file for correctness
-            if self.is_configuration_file_correct('FFOOOOFOFOFOF'):
+            if self.is_configuration_file_correct(self.dst_conf_file):
                 print "Configuration file is correct"
             else:
                 print "Configuration file is unusable, bailing out"
