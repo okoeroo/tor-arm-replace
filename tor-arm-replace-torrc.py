@@ -40,14 +40,9 @@ import signal
 
 USER = "tor-arm"
 GROUP = "tor-arm"
-USER = "nobody"
-GROUP = "admin"
+
 TOR_CONFIG_FILE = "/etc/tor/torrc"            # Destination
 ARM_CONFIG_FILE = "/var/lib/tor-arm/torrc"    # Source
-
-TOR_CONFIG_FILE = "/tmp/torrc"                                                         # Destination
-ARM_CONFIG_FILE = "/Applications/Tools/Vidalia.app/Contents/Resources/torrc.sample"    # Source
-
 
 
 class tor_arm_replace_torrc(object):
@@ -185,34 +180,35 @@ class tor_arm_replace_torrc(object):
             sys.exit(1)
 
         # Make a tempfile and write out the contents
+        """ Useless
         try:
             # TODO: Check path before HERE!!!
             tf = tempfile.NamedTemporaryFile(delete=False) # This uses mkstemp internally
         except:
             print "We were unable to make a temporary file"
             sys.exit(1)
+        """
 
 
-            
-
-            try:
-                af = open(ARM_CONFIG_FILE) # this is totally unpriv'ed
-                # ensure that the fd we opened has the properties we requrie
-                configStat = os.fstat(af.fileno()) # this happens on the unpriv'ed FD
-                if configStat.st_gid != dropped_gid:
-                    print "Arm's configuration file (%s) must be owned by the group %s" % (ARM_CONFIG_FILE, GROUP)
-                sys.exit(1)
-        # if everything checks out, we're as safe as we're going to get
-                armConfig = af.read(1024 * 1024) # limited read but not too limited
-                af.close()
-                tf.file.write(armConfig)
-                tf.flush()
-            except:
-                print "Unable to open the arm config as unpriv'ed user"
-                sys.exit(1)
-            finally:
-                tf.close()
-                sys.exit(0)
+        try:
+            # TODO: Check if its directory is trustable, open file first
+            af = open(ARM_CONFIG_FILE) # this is totally unpriv'ed
+            # ensure that the fd we opened has the properties we requrie
+            configStat = os.fstat(af.fileno()) # this happens on the unpriv'ed FD
+            if configStat.st_gid != dropped_gid:
+                print "Arm's configuration file (%s) must be owned by the group %s" % (ARM_CONFIG_FILE, GROUP)
+            sys.exit(1)
+    # if everything checks out, we're as safe as we're going to get
+            armConfig = af.read(1024 * 1024) # limited read but not too limited
+            af.close()
+            tf.file.write(armConfig)
+            tf.flush()
+        except:
+            print "Unable to open the arm config as unpriv'ed user"
+            sys.exit(1)
+        finally:
+            tf.close()
+            sys.exit(0)
 
         # Check the configuration file for correctness
             if self.is_configuration_file_correct(self.dst_conf_file):
