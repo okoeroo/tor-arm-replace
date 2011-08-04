@@ -37,6 +37,7 @@ import time
 import shutil
 import tempfile
 import signal
+from stat import *
 
 USER = "tor-arm"
 GROUP = "tor-arm"
@@ -45,11 +46,102 @@ TOR_CONFIG_FILE = "/etc/tor/torrc"            # Destination
 ARM_CONFIG_FILE = "/var/lib/tor-arm/torrc"    # Source
 
 
+"""
+The following class is a pure Python simplified version of the Safefile library
+from Kupsch & Miller of the University of Wisconsin
+"""
+class SimpleSafeFile(object):
+    PRIVATE   = 1
+    TRUSTED   = 2
+    UNTRUSTED = 4
+
+    def __init__(self, filepath):
+        # Make path non-relative, relative to the current working directory
+        filepath =  self.unrelativePath(filepath)
+        self.handle = open(filepath)
+
+        trust = self.determineTrustLevel(self.handle, filepath)
+
+    def unrelativePath(self, filePath):
+        if filePath[0] == '/':
+            return filePath
+        else:
+            return os.getcwd() + "/" +  filePath
+
+    def splitPath(self, filePath):
+        path = []
+        last_cut = filePath
+        while last_cut != '/':
+            path.append(os.path.split(last_cut)[1])
+            last_cut = os.path.split(last_cut)[0]
+
+        # The loop is filtering the '/'
+        path.append('/')
+        path.reverse()
+        return path
+
+    def expandPaths(self, decomposed_path):
+        expanded_path = []
+        for i in decomposed_path:
+            if i == '/':
+                current_path = "/"
+            elif current_path == "/":
+                current_path += i
+            else:
+                current_path += "/" + i
+
+            expanded_path.append(current_path)
+        return expanded_path
+
+    def checkTrustLevel(self, path):
+        mode = os.stat(path).st_mode
+        if S_ISDIR(mode):
+            if mode & S_ISVTX: # /tmp - Sticky bit. When this bit is set on a directory it means that a file in that directory can be renamed or deleted only by the owner of the file, by the owner of the directory, or by a privileged process.
+                print "foo"
+#                return self.TRUSTED
+#            if S_IWGRP(mode):
+#                return self.TRUSTED
+            return self.TRUSTED
+
+        elif S_ISREG(mode):
+            return self.TRUSTED
+        else:
+            return self.UNTRUSTED
+
+    def trustToString(self, trust_level):
+        if trust_level == self.PRIVATE:
+            return "Private"
+        elif trust_level == self.TRUSTED:
+            return "Trusted"
+        elif trust_level == self.UNTRUSTED:
+            return "Untrusted"
+
+    def determineTrustLevel(self, fileHandle, filePath):
+        # Cut the path and, build it from / up to the file. Must end up in the same file
+        unrelative_path           = self.unrelativePath(filePath)
+        decomposed_paths          = self.splitPath(unrelative_path)
+        expanded_decomposed_paths = self.expandPaths(decomposed_paths)
+
+        for i in expanded_decomposed_paths:
+            print i
+            trust = self.checkTrustLevel(i)
+            print self.trustToString(trust)
+
+        return fileHandle
+
+    def getHandle(self):
+        return self.handle
+
 class tor_arm_replace_torrc(object):
     def __init__(self, trusted_user, trusted_group, src_conf_file, dst_conf_file):
         if os.name != "posix":
             print "This is a script specifically for configuring Debian Gnu/Linux and other Unix like systems"
             sys.exit(1)
+
+        s = SimpleSafeFile("../../../screenrc")
+        f = s.getHandle()
+#        s = SimpleSafeFile("/Users/okoeroo/screenrc")
+        sys.exit(0)
 
         # 1. Remove the environment, do not pass go otherwise
         self.remove_environment()
