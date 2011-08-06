@@ -95,20 +95,43 @@ class SimpleSafeFile(object):
 
     def checkTrustLevel(self, path):
         mode = os.stat(path).st_mode
+
+        # Others can write
+        if mode & S_IWOTH == S_IWOTH:
+            return self.UNTRUSTED
+
+        # Special device are not trusted - might change in the future
+        if not S_ISDIR(mode) and not S_ISREG(mode):
+            return self.UNTRUSTED
+
         if S_ISDIR(mode):
-            if mode & S_ISVTX: # /tmp - Sticky bit. When this bit is set on a directory it means that a file in that directory can be renamed or deleted only by the owner of the file, by the owner of the directory, or by a privileged process.
-                print "foo"
-#                return self.TRUSTED
-#            if S_IWGRP(mode):
-#                return self.TRUSTED
-            return self.TRUSTED
+            # Sticky bit - When this bit is set on a directory it means that a
+            #              file in that directory can be renamed or deleted
+            #              only by the owner of the file, by the owner of the
+            #              directory, or by a privileged process.
+            if mode & S_ISVTX == S_ISVTX:
+                return self.TRUSTED
+
+            # Ownered by root, or myself, and nobody else can look or work in the directory
+            if  (os.stat(path).st_uid == 0 or os.stat(path).st_uid == os.getuid()) and \
+                (os.stat(path).st_gid == 0 or os.stat(path).st_gid == os.getgid()) and \
+                not (mode & S_IROTH == S_IROTH or mode & S_IXOTH == S_IXOTH):
+                return self.PRIVATE
+
+            # Ownered by root, or myself, and nobody else can look or work in the directory
+            if  (os.stat(path).st_uid == 0 or os.stat(path).st_uid == os.getuid()) and \
+                (os.stat(path).st_gid == 0 or os.stat(path).st_gid == os.getgid()):
+                return self.TRUSTED
+
+            # All else is untrusted
+            return self.UNTRUSTED
 
         elif S_ISREG(mode):
             return self.TRUSTED
         else:
             return self.UNTRUSTED
 
-    def trustToString(self, trust_level):
+    def trustLevelToString(self, trust_level):
         if trust_level == self.PRIVATE:
             return "Private"
         elif trust_level == self.TRUSTED:
@@ -122,12 +145,32 @@ class SimpleSafeFile(object):
         decomposed_paths          = self.splitPath(unrelative_path)
         expanded_decomposed_paths = self.expandPaths(decomposed_paths)
 
-        for i in expanded_decomposed_paths:
-            print i
-            trust = self.checkTrustLevel(i)
-            print self.trustToString(trust)
+        # Initialize like its perfect and downgrade, until hope is lost
+        trustlevel = self.PRIVATE
 
-        return fileHandle
+        for i in expanded_decomposed_paths:
+            trust = self.checkTrustLevel(i)
+            if trust == self.TRUSTED:
+                print "Trusted:    %s" % i
+            elif trust == self.PRIVATE:
+                print "Private:    %s" % i
+            else:
+                print "Untrusted:  %s" % i
+
+            # Still private, cool, continue please
+            if trust == self.PRIVATE and trustlevel == self.PRIVATE:
+                continue
+
+            # Downgrade a PRIVATE trustlevel to TRUSTED
+            if trust == self.TRUSTED and trustlevel == self.PRIVATE:
+                trustlevel = self.TRUSTED
+                continue
+
+            # All bets are off, good bye
+            if trust == self.UNTRUSTED:
+                return self.UNTRUSTED
+
+        return trustlevel
 
     def getHandle(self):
         return self.handle
@@ -139,6 +182,7 @@ class tor_arm_replace_torrc(object):
             sys.exit(1)
 
         s = SimpleSafeFile("../../../screenrc")
+#        s = SimpleSafeFile("/dev/ ../../../screenrc")
         f = s.getHandle()
 #        s = SimpleSafeFile("/Users/okoeroo/screenrc")
         sys.exit(0)
