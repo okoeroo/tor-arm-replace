@@ -61,6 +61,7 @@ class SimpleSafeFile(object):
         self.handle = open(filepath)
 
         trust = self.determineTrustLevel(self.handle, filepath)
+        print self.trustLevelToString(trust)
 
     def unrelativePath(self, filePath):
         if filePath[0] == '/':
@@ -113,15 +114,21 @@ class SimpleSafeFile(object):
                 return self.TRUSTED
 
             # Ownered by root, or myself, and nobody else can look or work in the directory
-            if  (os.stat(path).st_uid == 0 or os.stat(path).st_uid == os.getuid()) and \
-                (os.stat(path).st_gid == 0 or os.stat(path).st_gid == os.getgid()) and \
+            if  (os.stat(path).st_uid == 0 or os.stat(path).st_uid == os.geteuid()) and \
+                (os.stat(path).st_gid == 0 or os.stat(path).st_gid == os.getegid()) and \
                 not (mode & S_IROTH == S_IROTH or mode & S_IXOTH == S_IXOTH):
                 return self.PRIVATE
 
-            # Ownered by root, or myself, and nobody else can look or work in the directory
-            if  (os.stat(path).st_uid == 0 or os.stat(path).st_uid == os.getuid()) and \
-                (os.stat(path).st_gid == 0 or os.stat(path).st_gid == os.getgid()):
+            # Ownered by root, or myself
+            if  (os.stat(path).st_uid == 0 or os.stat(path).st_uid == os.geteuid()) and \
+                (os.stat(path).st_gid == 0 or os.stat(path).st_gid == os.getegid()):
                 return self.TRUSTED
+
+            # Owned by root user or myself
+            if  (os.stat(path).st_uid == 0 or os.stat(path).st_uid == os.geteuid()) and \
+                not (mode & S_IWOTH == S_IWOTH or mode & S_IWGRP == S_IWGRP):
+                return self.TRUSTED
+
 
             # All else is untrusted
             return self.UNTRUSTED
@@ -150,15 +157,10 @@ class SimpleSafeFile(object):
 
         for i in expanded_decomposed_paths:
             trust = self.checkTrustLevel(i)
-            if trust == self.TRUSTED:
-                print "Trusted:    %s" % i
-            elif trust == self.PRIVATE:
-                print "Private:    %s" % i
-            else:
-                print "Untrusted:  %s" % i
+#            print "%s      :  %s" % (self.trustLevelToString(trust), i)
 
             # Still private, cool, continue please
-            if trust == self.PRIVATE and trustlevel == self.PRIVATE:
+            if (trust == self.PRIVATE) and (trustlevel == self.PRIVATE):
                 continue
 
             # Downgrade a PRIVATE trustlevel to TRUSTED
@@ -170,6 +172,7 @@ class SimpleSafeFile(object):
             if trust == self.UNTRUSTED:
                 return self.UNTRUSTED
 
+#        print "Returned level is: %s" % self.trustLevelToString(trustlevel)
         return trustlevel
 
     def getHandle(self):
@@ -181,10 +184,10 @@ class tor_arm_replace_torrc(object):
             print "This is a script specifically for configuring Debian Gnu/Linux and other Unix like systems"
             sys.exit(1)
 
+        # Try to open the file safely
         s = SimpleSafeFile("../../../screenrc")
-#        s = SimpleSafeFile("/dev/ ../../../screenrc")
+
         f = s.getHandle()
-#        s = SimpleSafeFile("/Users/okoeroo/screenrc")
         sys.exit(0)
 
         # 1. Remove the environment, do not pass go otherwise
