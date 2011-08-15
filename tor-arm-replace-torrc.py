@@ -41,9 +41,11 @@ from stat import *
 
 USER = "tor-arm"
 GROUP = "tor-arm"
+USER = "okoeroo"
+GROUP = "admin"
 
-TOR_CONFIG_FILE = "/etc/tor/torrc"            # Destination
 ARM_CONFIG_FILE = "/var/lib/tor-arm/torrc"    # Source
+TOR_CONFIG_FILE = "/etc/tor/torrc"            # Destination
 
 
 """
@@ -61,7 +63,14 @@ class SimpleSafeFile(object):
         self.handle = open(filepath)
 
         trust = self.determineTrustLevel(self.handle, filepath)
-        print self.trustLevelToString(trust)
+        self.__set_trust_level(trust)
+#        print self.trustLevelToString(self.get_trust_level())
+
+    def get_trust_level(self):
+        return self.determined_trustlevel
+
+    def __set_trust_level(self, trust):
+        self.determined_trustlevel = trust
 
     def unrelativePath(self, filePath):
         if filePath[0] == '/':
@@ -98,7 +107,7 @@ class SimpleSafeFile(object):
         mode = os.stat(path).st_mode
 
         # Others can write
-        if mode & S_IWOTH == S_IWOTH:
+        if mode & S_IWOTH == S_IWOTH and not mode & S_ISVTX == S_ISVTX:
             return self.UNTRUSTED
 
         # Special device are not trusted - might change in the future
@@ -134,6 +143,7 @@ class SimpleSafeFile(object):
             return self.UNTRUSTED
 
         elif S_ISREG(mode):
+            # Can't be world writeable due to above directive, the rest is ok
             return self.TRUSTED
         else:
             return self.UNTRUSTED
@@ -145,6 +155,13 @@ class SimpleSafeFile(object):
             return "Trusted"
         elif trust_level == self.UNTRUSTED:
             return "Untrusted"
+
+    def isFileHandleAtPath(self, fileHandle, filePath):
+        if  os.stat(filePath).st_ino == os.fstat(fileHandle.fileno()).st_ino and \
+            os.stat(filePath).st_dev == os.fstat(fileHandle.fileno()).st_dev:
+            return True
+        else:
+            return False
 
     def determineTrustLevel(self, fileHandle, filePath):
         # Cut the path and, build it from / up to the file. Must end up in the same file
@@ -172,7 +189,10 @@ class SimpleSafeFile(object):
             if trust == self.UNTRUSTED:
                 return self.UNTRUSTED
 
-#        print "Returned level is: %s" % self.trustLevelToString(trustlevel)
+        # Check if the file handle (already opened and held, is the same file as to be found at the path)
+        if not self.isFileHandleAtPath(fileHandle, filePath):
+            return self.UNTRUSTED
+
         return trustlevel
 
     def getHandle(self):
@@ -183,12 +203,6 @@ class tor_arm_replace_torrc(object):
         if os.name != "posix":
             print "This is a script specifically for configuring Debian Gnu/Linux and other Unix like systems"
             sys.exit(1)
-
-        # Try to open the file safely
-        s = SimpleSafeFile("../../../screenrc")
-
-        f = s.getHandle()
-        sys.exit(0)
 
         # 1. Remove the environment, do not pass go otherwise
         self.remove_environment()
@@ -280,7 +294,13 @@ class tor_arm_replace_torrc(object):
         # backup the previous tor config
         if os.path.exists(self.dst_conf_file):
             try:
-                # TODO: Safety check
+                # Determine the trust level of the file and underlying directories
+                s = SimpleSafeFile(self.dst_conf_file)
+                if not (s.get_trust_level() == SimpleSafeFile.PRIVATE or \
+                        s.get_trust_level() == SimpleSafeFile.TRUSTED):
+                    print "File at %s is not trusted, not making a move" % self.dst_conf_file
+                    raise
+
                 backupFilename = "%s_backup_%i" % (self.dst_conf_file, int(time.time()))
                 shutil.copy(self.dst_conf_file, backupFilename)
             except IOError, exc:
@@ -319,25 +339,31 @@ class tor_arm_replace_torrc(object):
             sys.exit(1)
 
         # Make a tempfile and write out the contents
-        """ Useless
         try:
-            # TODO: Check path before HERE!!!
+            # Check path before on /tmp - I'm paranoid
+            mode = os.stat("/tmp").st_mode
+
+            if not mode & S_ISVTX == S_ISVTX:
+                print "The /tmp is not safe, not sticky bit detected. This is weird... bailing out"
+                raise
+
             tf = tempfile.NamedTemporaryFile(delete=False) # This uses mkstemp internally
         except:
             print "We were unable to make a temporary file"
             sys.exit(1)
-        """
-
 
         try:
-            # TODO: Check if its directory is trustable, open file first
-            af = open(ARM_CONFIG_FILE) # this is totally unpriv'ed
-            # ensure that the fd we opened has the properties we requrie
-            configStat = os.fstat(af.fileno()) # this happens on the unpriv'ed FD
-            if configStat.st_gid != dropped_gid:
-                print "Arm's configuration file (%s) must be owned by the group %s" % (ARM_CONFIG_FILE, GROUP)
-            sys.exit(1)
-    # if everything checks out, we're as safe as we're going to get
+            s = SimpleSafeFile(self.src_conf_file)
+            if not (s.get_trust_level() == SimpleSafeFile.PRIVATE or \
+                    s.get_trust_level() == SimpleSafeFile.TRUSTED):
+                print "File at %s is not trusted, not making a move" % self.src_conf_file
+                raise
+
+
+            # Get the checked and verified file handle
+            af = s.getHandle()
+
+            # if everything checks out, we're as safe as we're going to get
             armConfig = af.read(1024 * 1024) # limited read but not too limited
             af.close()
             tf.file.write(armConfig)
@@ -347,21 +373,14 @@ class tor_arm_replace_torrc(object):
             sys.exit(1)
         finally:
             tf.close()
-            sys.exit(0)
 
         # Check the configuration file for correctness
-            if self.is_configuration_file_correct(self.dst_conf_file):
-                print "Configuration file is correct"
-            else:
-                print "Configuration file is unusable, bailing out"
-                sys.exit(1)
-
-            # unlink our temp file
-            try:
-                os.remove(tf.name)
-            except:
-                print "Unable to close temp file %s" % tf.name
-                sys.exit(1)
+        if self.is_configuration_file_correct(self.dst_conf_file):
+            print "New configuration file is copied and correct"
+            sys.exit(0)
+        else:
+            print "New set configuration file is unusable, this is a problem."
+            sys.exit(1)
 
     def change_configuration(self):
         # I'm (effective) root here due to the object initializer
